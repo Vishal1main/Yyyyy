@@ -1,142 +1,144 @@
 import os
 import logging
+import asyncio
 from flask import Flask, request
-from telegram import Update, InputFile, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    Application, CommandHandler, MessageHandler, CallbackQueryHandler,
-    ContextTypes, filters
-)
-from config import BOT_TOKEN, user_settings
-from downloader import download_file
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters, CallbackQueryHandler
+from config import BOT_TOKEN, WEBHOOK_URL
+import aiohttp
 
 logging.basicConfig(level=logging.INFO)
-THUMBNAIL_DIR = "thumbnails"
-os.makedirs(THUMBNAIL_DIR, exist_ok=True)
+logger = logging.getLogger(__name__)
 
+user_settings = {}
+
+# === Flask Setup ===
+flask_app = Flask(__name__)
+
+# === Telegram Bot Setup ===
+app = Application.builder().token(BOT_TOKEN).build()
+
+# === Webhook Endpoint ===
+@flask_app.post("/webhook")
+async def webhook():
+    update = Update.de_json(request.get_json(force=True))
+    await app.update_queue.put(update)
+    return "ok"
+
+# === Flask test endpoint ===
+@flask_app.route("/")
+def home():
+    return "Bot is running."
+
+# === Command: /start ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    user_settings[user_id] = {"mode": "media", "thumb": None}
-    await update.message.reply_text("👋 Send me a direct download link.\nUse /settings to change upload settings.")
+    await update.message.reply_text("👋 Send me a direct download link to begin.")
 
+# === Command: /settings ===
 async def settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
-        [InlineKeyboardButton("📎 Document", callback_data="mode_document"),
-         InlineKeyboardButton("🎬 Media", callback_data="mode_media")],
-        [InlineKeyboardButton("📸 Set Thumbnail", callback_data="set_thumb"),
-         InlineKeyboardButton("🗑 Remove Thumbnail", callback_data="remove_thumb")]
+        [InlineKeyboardButton("📎 Upload as Document", callback_data="mode_document"),
+         InlineKeyboardButton("🎞 Upload as Video", callback_data="mode_video")],
+        [InlineKeyboardButton("🖼 Set Thumbnail", callback_data="set_thumbnail")],
+        [InlineKeyboardButton("🧩 Clear Thumbnail", callback_data="clear_thumbnail")]
     ]
-    await update.message.reply_text("⚙️ Choose an option:", reply_markup=InlineKeyboardMarkup(keyboard))
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text("⚙️ Choose your settings:", reply_markup=reply_markup)
 
-async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# === Callback handler ===
+async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_id = query.from_user.id
     await query.answer()
-    if query.data.startswith("mode_"):
-        user_settings[user_id]["mode"] = query.data.split("_")[1]
-        await query.edit_message_text(f"✅ Mode set to: {user_settings[user_id]['mode'].capitalize()}")
-    elif query.data == "set_thumb":
-        user_settings[user_id]["awaiting_thumb"] = True
-        await query.edit_message_text("📸 Send an image to use as thumbnail.")
-    elif query.data == "remove_thumb":
-        path = f"{THUMBNAIL_DIR}/{user_id}.jpg"
-        if os.path.exists(path):
-            os.remove(path)
-        user_settings[user_id]["thumb"] = None
-        await query.edit_message_text("🗑 Thumbnail removed.")
 
-async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if user_settings.get(user_id, {}).get("awaiting_thumb"):
+    if query.data == "mode_document":
+        user_settings[user_id] = user_settings.get(user_id, {})
+        user_settings[user_id]["mode"] = "document"
+        await query.edit_message_text("✅ Upload mode set to Document")
+    elif query.data == "mode_video":
+        user_settings[user_id] = user_settings.get(user_id, {})
+        user_settings[user_id]["mode"] = "video"
+        await query.edit_message_text("✅ Upload mode set to Video")
+    elif query.data == "set_thumbnail":
+        await query.edit_message_text("📤 Now send the thumbnail image.")
+        context.user_data["awaiting_thumb"] = True
+    elif query.data == "clear_thumbnail":
+        user_settings[user_id] = user_settings.get(user_id, {})
+        user_settings[user_id]["thumbnail"] = None
+        await query.edit_message_text("🗑 Thumbnail cleared.")
+
+# === Photo receiver for thumbnail ===
+async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if context.user_data.get("awaiting_thumb"):
         photo = update.message.photo[-1]
-        file = await photo.get_file()
-        path = f"{THUMBNAIL_DIR}/{user_id}.jpg"
-        await file.download_to_drive(path)
-        user_settings[user_id]["thumb"] = path
-        user_settings[user_id]["awaiting_thumb"] = False
-        await update.message.reply_text("✅ Thumbnail saved!")
+        file = await context.bot.get_file(photo.file_id)
+        thumb_path = f"thumb_{update.effective_user.id}.jpg"
+        await file.download_to_drive(thumb_path)
 
-async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
+        user_settings[update.effective_user.id] = user_settings.get(update.effective_user.id, {})
+        user_settings[update.effective_user.id]["thumbnail"] = thumb_path
+        await update.message.reply_text("✅ Thumbnail saved.")
+        context.user_data["awaiting_thumb"] = False
+
+# === Message handler for direct links ===
+async def link_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text.strip()
-    await update.message.reply_text("📥 Downloading file...")
-    filename = "downloaded_file"
+    if not url.startswith("http"):
+        return await update.message.reply_text("⚠️ Invalid link!")
 
-    try:
-        await download_file(url, filename)
-        context.user_data["file_path"] = filename
-        await update.message.reply_text("✏️ Send a new filename with extension or type /skip.")
-        context.user_data["awaiting_rename"] = True
-    except Exception as e:
-        await update.message.reply_text(f"❌ Download failed: {e}")
-
-async def rename_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if context.user_data.get("awaiting_rename"):
-        old = context.user_data["file_path"]
-        new = update.message.text.strip()
-        os.rename(old, new)
-        context.user_data["file_path"] = new
-        context.user_data["awaiting_rename"] = False
-        await send_file(update, context, new)
-
-async def skip_rename(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if context.user_data.get("awaiting_rename"):
-        context.user_data["awaiting_rename"] = False
-        await send_file(update, context, context.user_data["file_path"])
-
-async def send_file(update: Update, context: ContextTypes.DEFAULT_TYPE, path: str):
     user_id = update.effective_user.id
-    mode = user_settings[user_id].get("mode", "media")
-    thumb = user_settings[user_id].get("thumb")
+    settings = user_settings.get(user_id, {})
+    mode = settings.get("mode", "document")
+    thumb = settings.get("thumbnail")
+
+    msg = await update.message.reply_text("📥 Downloading file...")
 
     try:
-        with open(path, "rb") as f:
-            input_file = InputFile(f)
-            if mode == "document":
-                await update.message.reply_document(document=input_file, thumb=thumb)
-            elif path.endswith((".mp4", ".mkv")):
-                await update.message.reply_video(video=input_file, thumb=thumb, supports_streaming=True)
-            elif path.endswith((".mp3", ".wav")):
-                await update.message.reply_audio(audio=input_file, thumb=thumb)
-            elif path.endswith((".jpg", ".png", ".jpeg")):
-                await update.message.reply_photo(photo=input_file)
-            else:
-                await update.message.reply_document(document=input_file)
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as resp:
+                if resp.status != 200:
+                    return await msg.edit_text("❌ Failed to download file.")
+                filename = url.split("/")[-1].split("?")[0] or "file"
+                data = await resp.read()
+
+        with open(filename, "wb") as f:
+            f.write(data)
+
+        send_kwargs = {
+            "chat_id": update.effective_chat.id,
+        }
+
+        if mode == "document":
+            send_kwargs["document"] = open(filename, "rb")
+            if thumb:
+                send_kwargs["thumb"] = open(thumb, "rb")
+            await context.bot.send_document(**send_kwargs)
+        else:
+            send_kwargs["video"] = open(filename, "rb")
+            if thumb:
+                send_kwargs["thumb"] = open(thumb, "rb")
+            await context.bot.send_video(**send_kwargs)
+
+        await msg.delete()
+        os.remove(filename)
+
     except Exception as e:
-        await update.message.reply_text(f"❌ Upload failed: {e}")
-    finally:
-        os.remove(path)
+        logger.error(e)
+        await msg.edit_text("❌ Error during upload.")
 
-def main():
-    import asyncio
-    PORT = int(os.environ.get("PORT", 8443))
-    WEBHOOK_URL = os.environ.get("WEBHOOK_URL")
+# === Handlers ===
+app.add_handler(CommandHandler("start", start))
+app.add_handler(CommandHandler("settings", settings))
+app.add_handler(CallbackQueryHandler(callback_handler))
+app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
+app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, link_handler))
 
-    app = Application.builder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("settings", settings))
-    app.add_handler(CommandHandler("skip", skip_rename))
-    app.add_handler(CallbackQueryHandler(handle_buttons))
-    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^https?://"), handle_link))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, rename_file))
-
-    flask_app = Flask(__name__)
-
-    @flask_app.post("/webhook")
-    async def webhook():
-        await app.update_queue.put(Update.de_json(request.get_json(force=True), app.bot))
-        return "ok"
-
-    async def run():
-        await app.bot.set_webhook(f"{WEBHOOK_URL}/webhook")
-        await app.initialize()
-        await app.start()
-        await flask_app.run(host="0.0.0.0", port=PORT)
-
-    try:
-        asyncio.run(run())
-    except Exception as e:
-        print("❌ Bot failed to start:", e)
+# === Set Webhook and Run ===
+async def set_webhook():
+    await app.bot.set_webhook(WEBHOOK_URL)
 
 if __name__ == "__main__":
-    main()
+    import asyncio
+    asyncio.run(set_webhook())
+    app.run_polling = lambda *a, **k: None  # Disable polling completely
+    flask_app.run(host="0.0.0.0", port=10000)
