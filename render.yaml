@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: telegram-uploader-bot
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
+    envVars:
+      - key: BOT_TOKEN
+        value: 7861502352:AAFcS7xZk2NvN7eJ3jcPm_HyYh74my8vRyU
+      - key: WEBHOOK_URL
+        value: https://yyyyy-cpnv.onrender.com
