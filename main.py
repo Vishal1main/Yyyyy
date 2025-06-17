@@ -1,7 +1,7 @@
 import os
 import logging
 from flask import Flask, request
-from telegram import Update, InputFile, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram import Update, InputFile, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, CallbackQueryHandler,
     ContextTypes, filters
@@ -16,7 +16,7 @@ os.makedirs(THUMBNAIL_DIR, exist_ok=True)
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_settings[user_id] = {"mode": "media", "thumb": None}
-    await update.message.reply_text("Send a direct download link.\nUse /settings to customize upload.")
+    await update.message.reply_text("👋 Send me a direct download link.\nUse /settings to change upload settings.")
 
 async def settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
@@ -25,7 +25,7 @@ async def settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("📸 Set Thumbnail", callback_data="set_thumb"),
          InlineKeyboardButton("🗑 Remove Thumbnail", callback_data="remove_thumb")]
     ]
-    await update.message.reply_text("Settings:", reply_markup=InlineKeyboardMarkup(keyboard))
+    await update.message.reply_text("⚙️ Choose an option:", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -33,10 +33,10 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     if query.data.startswith("mode_"):
         user_settings[user_id]["mode"] = query.data.split("_")[1]
-        await query.edit_message_text(f"✅ Upload mode set to: {user_settings[user_id]['mode'].capitalize()}")
+        await query.edit_message_text(f"✅ Mode set to: {user_settings[user_id]['mode'].capitalize()}")
     elif query.data == "set_thumb":
         user_settings[user_id]["awaiting_thumb"] = True
-        await query.edit_message_text("📤 Send the image you want to use as thumbnail.")
+        await query.edit_message_text("📸 Send an image to use as thumbnail.")
     elif query.data == "remove_thumb":
         path = f"{THUMBNAIL_DIR}/{user_id}.jpg"
         if os.path.exists(path):
@@ -58,16 +58,16 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     url = update.message.text.strip()
-    await update.message.reply_text("🔄 Downloading file...")
+    await update.message.reply_text("📥 Downloading file...")
     filename = "downloaded_file"
 
     try:
         await download_file(url, filename)
         context.user_data["file_path"] = filename
-        await update.message.reply_text("📝 Send new filename with extension (or /skip):")
+        await update.message.reply_text("✏️ Send a new filename with extension or type /skip.")
         context.user_data["awaiting_rename"] = True
     except Exception as e:
-        await update.message.reply_text(f"❌ Download error: {e}")
+        await update.message.reply_text(f"❌ Download failed: {e}")
 
 async def rename_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.user_data.get("awaiting_rename"):
@@ -102,17 +102,16 @@ async def send_file(update: Update, context: ContextTypes.DEFAULT_TYPE, path: st
             else:
                 await update.message.reply_document(document=input_file)
     except Exception as e:
-        await update.message.reply_text(f"❌ Upload error: {e}")
+        await update.message.reply_text(f"❌ Upload failed: {e}")
     finally:
         os.remove(path)
 
 def main():
     import asyncio
     PORT = int(os.environ.get("PORT", 8443))
-    WEBHOOK_URL = os.environ.get("WEBHOOK_URL")  # e.g. https://your-app.onrender.com
+    WEBHOOK_URL = os.environ.get("WEBHOOK_URL")
 
     app = Application.builder().token(BOT_TOKEN).build()
-
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("settings", settings))
     app.add_handler(CommandHandler("skip", skip_rename))
@@ -134,7 +133,10 @@ def main():
         await app.start()
         await flask_app.run(host="0.0.0.0", port=PORT)
 
-    asyncio.run(run())
+    try:
+        asyncio.run(run())
+    except Exception as e:
+        print("❌ Bot failed to start:", e)
 
 if __name__ == "__main__":
     main()
