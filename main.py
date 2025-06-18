@@ -16,14 +16,17 @@ logger = logging.getLogger(__name__)
 # Flask app
 app = Flask(__name__)
 
-# Telegram app
+# Telegram bot app
 bot_app = Application.builder().token(BOT_TOKEN).build()
 user_links = {}
 
-# Handlers
+# ─────────────────────────────────────────────
+# 🔹 Handlers
+# ─────────────────────────────────────────────
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info("✅ /start received")
-    await update.message.reply_text("Send a direct download link.")
+    await update.message.reply_text("📥 Send a direct download link.")
 
 async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text.strip()
@@ -31,10 +34,10 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     user_links[update.effective_chat.id] = url
     buttons = [
-        [InlineKeyboardButton("Default Name", callback_data="default")],
-        [InlineKeyboardButton("Rename", callback_data="rename")]
+        [InlineKeyboardButton("📁 Default Name", callback_data="default")],
+        [InlineKeyboardButton("✏️ Rename", callback_data="rename")]
     ]
-    await update.message.reply_text("Choose how to upload:", reply_markup=InlineKeyboardMarkup(buttons))
+    await update.message.reply_text("Choose upload option:", reply_markup=InlineKeyboardMarkup(buttons))
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -43,7 +46,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = user_links.get(chat_id)
 
     if not url:
-        await query.message.reply_text("No URL found. Please send a new one.")
+        await query.message.reply_text("❗No URL found. Please send again.")
         return
 
     if query.data == "default":
@@ -52,7 +55,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         os.remove(filename)
     elif query.data == "rename":
         context.user_data['rename'] = True
-        await query.message.reply_text("Send new file name with extension.")
+        await query.message.reply_text("Send new file name (with extension):")
 
 async def rename_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.user_data.get('rename'):
@@ -64,15 +67,22 @@ async def rename_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         os.remove(filename)
         context.user_data['rename'] = False
 
-# Register handlers
+# ─────────────────────────────────────────────
+# 🔹 Register Handlers
+# ─────────────────────────────────────────────
+
 bot_app.add_handler(CommandHandler("start", start))
 bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_link))
 bot_app.add_handler(CallbackQueryHandler(button_handler))
 bot_app.add_handler(MessageHandler(filters.TEXT & filters.ALL, rename_handler))
 
+# ─────────────────────────────────────────────
+# 🔹 Flask Routes
+# ─────────────────────────────────────────────
+
 @app.route("/")
 def home():
-    return "Bot is running!"
+    return "✅ Bot is running!"
 
 @app.route(WEBHOOK_PATH, methods=["POST"])
 async def webhook():
@@ -80,6 +90,12 @@ async def webhook():
         payload = request.get_json(force=True)
         logger.info("📩 Webhook received: %s", payload)
         update = Update.de_json(payload, bot_app.bot)
+
+        # Important: Initialize/start bot if not already running
+        if not bot_app.running:
+            await bot_app.initialize()
+            await bot_app.start()
+
         await bot_app.process_update(update)
     except Exception as e:
         logger.error("❌ Webhook error: %s", e)
@@ -88,8 +104,12 @@ async def webhook():
 @app.route("/set_webhook")
 async def set_webhook():
     success = await bot_app.bot.set_webhook(url=BASE_WEBHOOK_URL)
-    return f"Webhook set: {success}"
+    return f"✅ Webhook set: {success}"
+
+# ─────────────────────────────────────────────
+# 🔹 Start App
+# ─────────────────────────────────────────────
 
 if __name__ == "__main__":
-    print("🚀 Starting bot...")
+    print("🚀 Bot is starting on port 10000...")
     app.run(host="0.0.0.0", port=10000)
