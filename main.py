@@ -56,7 +56,7 @@ def main():
     app.run_webhook(
         listen="0.0.0.0",
         port=8443,
-        webhook_url=f"{WEBHOOK_URL}"
+        webhook_url=f"https://yyyyy-cpnv.onrender.com/webhook"
     )
 
 if __name__ == "__main__":
