@@ -9,15 +9,21 @@ from telegram.ext import (
 from config import BOT_TOKEN, WEBHOOK_PATH, BASE_WEBHOOK_URL
 from utils import download_file
 
+# Logging setup
 logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Flask app
 app = Flask(__name__)
+
+# Telegram app
 bot_app = Application.builder().token(BOT_TOKEN).build()
 user_links = {}
 
-# Telegram handlers
+# Handlers
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    print("✅ /start command received")
-    await update.message.reply_text("Send me a direct download link.")
+    logger.info("✅ /start received")
+    await update.message.reply_text("Send a direct download link.")
 
 async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text.strip()
@@ -36,13 +42,17 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = query.message.chat_id
     url = user_links.get(chat_id)
 
+    if not url:
+        await query.message.reply_text("No URL found. Please send a new one.")
+        return
+
     if query.data == "default":
         filename = download_file(url)
         await context.bot.send_document(chat_id=chat_id, document=open(filename, "rb"))
         os.remove(filename)
     elif query.data == "rename":
         context.user_data['rename'] = True
-        await query.message.reply_text("Send new file name (with extension)")
+        await query.message.reply_text("Send new file name with extension.")
 
 async def rename_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.user_data.get('rename'):
@@ -65,21 +75,21 @@ def home():
     return "Bot is running!"
 
 @app.route(WEBHOOK_PATH, methods=["POST"])
-def webhook():
+async def webhook():
     try:
         payload = request.get_json(force=True)
-        print("📩 Webhook received:", payload)
+        logger.info("📩 Webhook received: %s", payload)
         update = Update.de_json(payload, bot_app.bot)
-        bot_app.create_task(bot_app.process_update(update))  # non-blocking
+        await bot_app.process_update(update)
     except Exception as e:
-        print("❌ Webhook error:", e)
+        logger.error("❌ Webhook error: %s", e)
     return "ok"
 
 @app.route("/set_webhook")
-def set_webhook():
-    success = bot_app.bot.set_webhook(url=BASE_WEBHOOK_URL)
+async def set_webhook():
+    success = await bot_app.bot.set_webhook(url=BASE_WEBHOOK_URL)
     return f"Webhook set: {success}"
 
 if __name__ == "__main__":
-    print("Starting Flask server...")
+    print("🚀 Starting bot...")
     app.run(host="0.0.0.0", port=10000)
