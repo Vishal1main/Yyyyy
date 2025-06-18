@@ -1,16 +1,10 @@
-import os
 import requests
 
-def download_file(url, filename="file"):
+def download_file(url, custom_name=None):
     response = requests.get(url, stream=True)
-    content_disposition = response.headers.get("content-disposition")
-    ext = ""
-    if content_disposition and "filename=" in content_disposition:
-        ext = content_disposition.split("filename=")[-1].strip('"')
-    else:
-        ext = url.split("/")[-1]
-    final_name = f"{filename}_{ext}" if filename else ext
-    with open(final_name, "wb") as f:
-        for chunk in response.iter_content(chunk_size=8192):
+    original_name = url.split("/")[-1].split("?")[0]
+    file_name = custom_name if custom_name else original_name
+    with open(file_name, "wb") as f:
+        for chunk in response.iter_content(1024 * 1024):
             f.write(chunk)
-    return final_name
+    return file_name
