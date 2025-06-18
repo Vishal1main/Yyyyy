@@ -1,20 +1,23 @@
+import os
+import logging
 from flask import Flask, request
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, CallbackQueryHandler,
     ContextTypes, filters
 )
+from config import BOT_TOKEN, WEBHOOK_PATH, BASE_WEBHOOK_URL
 from utils import download_file
-from config import BOT_TOKEN, WEBHOOK_PATH
-import os, asyncio
 
+logging.basicConfig(level=logging.INFO)
 app = Flask(__name__)
 bot_app = Application.builder().token(BOT_TOKEN).build()
 user_links = {}
 
 # Telegram handlers
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Send a direct download link.")
+    print("✅ /start command received")
+    await update.message.reply_text("Send me a direct download link.")
 
 async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text.strip()
@@ -25,7 +28,7 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("Default Name", callback_data="default")],
         [InlineKeyboardButton("Rename", callback_data="rename")]
     ]
-    await update.message.reply_text("Choose upload type:", reply_markup=InlineKeyboardMarkup(buttons))
+    await update.message.reply_text("Choose how to upload:", reply_markup=InlineKeyboardMarkup(buttons))
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -44,9 +47,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def rename_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.user_data.get('rename'):
         name = update.message.text.strip()
-        url = user_links.get(update.effective_chat.id)
-        filename = download_file(url, name)
-        await context.bot.send_document(chat_id=update.effective_chat.id, document=open(filename, "rb"))
+        chat_id = update.effective_chat.id
+        url = user_links.get(chat_id)
+        filename = download_file(url, custom_name=name)
+        await context.bot.send_document(chat_id=chat_id, document=open(filename, "rb"))
         os.remove(filename)
         context.user_data['rename'] = False
 
@@ -66,6 +70,11 @@ async def webhook():
     await bot_app.process_update(update)
     return "ok"
 
+@app.route("/set_webhook")
+def set_webhook():
+    success = bot_app.bot.set_webhook(url=BASE_WEBHOOK_URL)
+    return f"Webhook set: {success}"
+
 if __name__ == "__main__":
-    bot_app.bot.set_webhook(url=f"https://yyyyy-cpnv.onrender.com{WEBHOOK_PATH}")
+    print("Starting Flask server...")
     app.run(host="0.0.0.0", port=10000)
