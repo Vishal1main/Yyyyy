@@ -65,9 +65,14 @@ def home():
     return "Bot is running!"
 
 @app.route(WEBHOOK_PATH, methods=["POST"])
-async def webhook():
-    update = Update.de_json(request.get_json(force=True), bot_app.bot)
-    await bot_app.process_update(update)
+def webhook():
+    try:
+        payload = request.get_json(force=True)
+        print("📩 Webhook received:", payload)
+        update = Update.de_json(payload, bot_app.bot)
+        bot_app.create_task(bot_app.process_update(update))  # non-blocking
+    except Exception as e:
+        print("❌ Webhook error:", e)
     return "ok"
 
 @app.route("/set_webhook")
