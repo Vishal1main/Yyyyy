@@ -3,24 +3,25 @@ const config = require('./config');
 const bot = require('./bot');
 
 const app = express();
+app.get('/', (req, res) => res.send('Bot is running'));
 
-// Health check endpoint
-app.get('/', (req, res) => {
-  res.send('URL Uploader Bot is running');
-});
-
-// Start server
-app.listen(config.PORT, () => {
+const server = app.listen(config.PORT, () => {
   console.log(`Server running on port ${config.PORT}`);
+  
+  bot.launch({
+    timeout: 120000 // 120 seconds timeout
+  }).then(() => {
+    console.log('Bot started successfully');
+  }).catch(err => {
+    console.error('Bot failed to start:', err);
+    process.exit(1);
+  });
 });
 
-// Start bot (using polling)
-bot.launch().then(() => {
-  console.log('Bot is running in polling mode');
-}).catch(err => {
-  console.error('Bot failed to start:', err);
+['SIGINT', 'SIGTERM'].forEach(signal => {
+  process.once(signal, () => {
+    console.log(`Received ${signal}, shutting down...`);
+    bot.stop(signal);
+    server.close();
+  });
 });
-
-// Enable graceful stop
-process.once('SIGINT', () => bot.stop('SIGINT'));
-process.once('SIGTERM', () => bot.stop('SIGTERM'));
