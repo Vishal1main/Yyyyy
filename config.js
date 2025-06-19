@@ -4,5 +4,5 @@ module.exports = {
   TEMP_DIR: './temp',
   ALLOWED_USERS: [],
   PORT: process.env.PORT || 3000,
-  WEBHOOK_URL: 'https://yourdomain.com' // Optional for webhooks
+  WEBHOOK_URL: 'https://yyyyy-er7k.onrender.com' // Optional for webhooks
 };
