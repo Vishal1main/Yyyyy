@@ -1,19 +1,15 @@
 {
-  "name": "telegram-url-uploader",
+  "name": "telegram-downloader-bot",
   "version": "1.0.0",
-  "description": "Telegram bot to upload files from direct URLs",
-  "main": "server.js",
+  "description": "Telegram bot for downloading direct links and uploading to Telegram",
+  "main": "Op_wood.js",
   "scripts": {
-    "start": "node server.js",
-    "dev": "nodemon server.js"
+    "start": "node Op_wood.js"
   },
   "dependencies": {
-    "axios": "^1.6.7",
-    "express": "^4.18.2",
-    "fs-extra": "^11.2.0",
-    "telegraf": "^4.12.2"
-  },
-  "devDependencies": {
-    "nodemon": "^3.0.2"
+    "axios": "^1.6.8",
+    "express": "^4.19.2",
+    "telegraf": "^4.17.0",
+    "uuid": "^9.0.1"
   }
 }
