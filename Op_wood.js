@@ -8,7 +8,7 @@ const { v4: uuidv4 } = require('uuid');
 const app = express();
 const PORT = 3000;
 
-const bot = new Telegraf('YOUR_BOT_TOKEN');
+const bot = new Telegraf('7861502352:AAF09jfPpjU78dnwl4NiM95TadZAE6kjo1M');
 
 // Telegram Bot Handler
 bot.command('download', async (ctx) => {
