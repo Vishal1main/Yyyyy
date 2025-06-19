@@ -8,12 +8,7 @@ const { downloadFile } = require('./utils/downloader');
 const { getFileExtension } = require('./utils/fileHandler');
 
 const bot = new Telegraf(config.BOT_TOKEN);
-
-// User sessions to store file info
 const userSessions = {};
-
-// Ensure temp directory exists
-fse.ensureDirSync(config.TEMP_DIR);
 
 // Progress bar function
 function createProgressBar(percentage, length = 20) {
@@ -22,9 +17,8 @@ function createProgressBar(percentage, length = 20) {
   return `[${'█'.repeat(completed)}${'░'.repeat(remaining)}] ${percentage.toFixed(1)}%`;
 }
 
-// Start command with better formatting
 bot.start((ctx) => {
-  const welcomeMessage = `
+  ctx.replyWithMarkdown(`
 🎉 *Welcome to URL Uploader Bot* 🎉
 
 🔹 *Features:*
@@ -38,157 +32,129 @@ bot.start((ctx) => {
 2. I'll show you the file details
 3. Use /rename to change the filename
 4. Confirm to start upload
-
-⚡ *Example URLs:*
-\`https://example.com/file.mp4\`
-\`https://example.com/document.pdf\`
-
-⚠️ *Note:* Only direct download links are supported
-  `;
-
-  ctx.replyWithMarkdown(welcomeMessage, Markup.keyboard([
-    ['/help']
-  ]).resize());
-});
-
-// Help command
-bot.command('help', (ctx) => {
-  ctx.replyWithMarkdown(`
-🆘 *Help Guide*
-
-📤 *To upload a file:*
-1. Send a direct download URL
-2. The bot will detect it and show details
-3. Use the /rename command if needed
-4. Confirm to start upload
-
-🔄 *Rename a file:*
-/rename <new_filename>
-
-📏 *File Limits:*
-- Max size: ${config.MAX_FILE_SIZE}MB
-- Must be direct download link
-
-🔗 *Example:*
-\`https://example.com/video.mp4\`
   `);
 });
 
-// Handle URLs sent by user
 bot.on('text', async (ctx) => {
   const text = ctx.message.text.trim();
   
   if (isValidUrl(text) && !text.startsWith('/')) {
     try {
-      // Get file info
       const filename = path.basename(new URL(text).pathname);
       const fileInfo = await getFileInfo(text);
       
       if (fileInfo.size > config.MAX_FILE_SIZE * 1024 * 1024) {
-        return ctx.reply(`❌ File is too large (${(fileInfo.size / (1024 * 1024)).toFixed(2)}MB). Max allowed: ${config.MAX_FILE_SIZE}MB.`);
+        return ctx.reply(`❌ File too large (${(fileInfo.size / (1024 * 1024)).toFixed(2)}MB). Max: ${config.MAX_FILE_SIZE}MB.`);
       }
       
-      // Store in user session
       userSessions[ctx.from.id] = {
         url: text,
         originalName: filename,
         size: fileInfo.size,
-        type: fileInfo.type
+        type: fileInfo.type,
+        messageId: ctx.message.message_id
       };
       
-      // Send file details with rename option
-      ctx.replyWithMarkdown(
+      const reply = await ctx.replyWithMarkdown(
         `📄 *File Detected*\n\n` +
         `🔹 *Name:* \`${filename}\`\n` +
         `🔹 *Size:* ${formatFileSize(fileInfo.size)}\n` +
         `🔹 *Type:* ${fileInfo.type}\n\n` +
-        `Do you want to upload this file?`,
+        `Do you want to upload?`,
         Markup.inlineKeyboard([
-          Markup.button.callback('🔄 Rename', 'rename_file'),
-          Markup.button.callback('✅ Upload Now', 'confirm_upload')
+          [Markup.button.callback('🔄 Rename', 'rename_file'),
+           Markup.button.callback('✅ Upload Now', 'confirm_upload')]
         ])
       );
+      
+      userSessions[ctx.from.id].replyMessageId = reply.message_id;
     } catch (error) {
-      ctx.reply(`❌ Error: ${error.message}\n\nPlease make sure this is a valid direct download link.`);
+      ctx.reply(`❌ Error: ${error.message}`);
     }
   }
-});
-
-// Rename command
-bot.command('rename', (ctx) => {
-  const args = ctx.message.text.split(' ').slice(1);
-  const newName = args.join(' ');
-  
-  if (!newName) {
-    return ctx.reply('Please provide a new filename. Example:\n/rename myfile.mp4');
-  }
-  
-  if (!userSessions[ctx.from.id]) {
-    return ctx.reply('No file pending for upload. Please send a URL first.');
-  }
-  
-  userSessions[ctx.from.id].newName = newName;
-  ctx.reply(`✅ Filename changed to: ${newName}\n\nUse /upload to start the transfer.`);
-});
-
-// Handle button callbacks
-bot.action('rename_file', (ctx) => {
-  ctx.reply('Please send the new filename using the /rename command. Example:\n/rename myvideo.mp4');
 });
 
 bot.action('confirm_upload', async (ctx) => {
+  const userId = ctx.from.id;
+  const session = userSessions[userId];
+  
+  if (!session?.url) {
+    return ctx.editMessageText('❌ No file to upload. Send URL first.');
+  }
+  
+  await ctx.editMessageText('⏳ Starting download...');
+  
   try {
-    const userId = ctx.from.id;
-    const session = userSessions[userId];
-    
-    if (!session) {
-      return ctx.editMessageText('❌ No file to upload. Please send a URL first.');
-    }
-    
-    await ctx.editMessageText('⏳ Starting download... Please wait.');
-    
-    // Download the file with progress
-    const { filePath, originalName } = await downloadFileWithProgress(
+    const { filePath } = await downloadFileWithProgress(
       session.url,
       config.TEMP_DIR,
       (progress) => {
-        const progressText = `📥 Downloading: ${createProgressBar(progress)}\n\n` +
-          `File: ${session.newName || originalName}\n` +
-          `Size: ${formatFileSize(session.size)}`;
-        
-        // Edit message with progress
         ctx.telegram.editMessageText(
           ctx.chat.id,
           ctx.callbackQuery.message.message_id,
           null,
-          progressText
-        ).catch(() => {}); // Ignore message edit errors
+          `📥 Downloading: ${createProgressBar(progress)}\nFile: ${session.newName || session.originalName}`
+        ).catch(() => {});
       }
     );
     
-    // Determine final filename
-    const finalFilename = session.newName || originalName;
-    
-    // Upload the file
+    const finalFilename = session.newName || session.originalName;
     await ctx.telegram.editMessageText(
       ctx.chat.id,
       ctx.callbackQuery.message.message_id,
       null,
-      `📤 Uploading to Telegram: ${finalFilename}`
+      `📤 Uploading: ${finalFilename}`
     );
     
     await ctx.replyWithDocument(
       { source: filePath, filename: finalFilename },
-      { caption: `✅ Upload complete!\n\nOriginal URL: ${session.url}` }
+      { caption: `✅ Upload complete!\nURL: ${session.url}` }
     );
     
-    // Clean up
     fs.unlinkSync(filePath);
     delete userSessions[userId];
+    await ctx.deleteMessage(ctx.callbackQuery.message.message_id).catch(() => {});
   } catch (error) {
     console.error('Upload error:', error);
     ctx.reply(`❌ Upload failed: ${error.message}`);
   }
+});
+
+bot.action('rename_file', (ctx) => {
+  ctx.reply('Send /rename <newfilename> to change the filename');
+});
+
+bot.command('rename', (ctx) => {
+  const newName = ctx.message.text.split(' ').slice(1).join(' ');
+  const userId = ctx.from.id;
+  
+  if (!newName) return ctx.reply('Usage: /rename <newfilename>');
+  if (!userSessions[userId]?.url) return ctx.reply('No file to rename. Send URL first.');
+  
+  userSessions[userId].newName = newName;
+  
+  if (userSessions[userId].replyMessageId) {
+    ctx.telegram.editMessageText(
+      ctx.chat.id,
+      userSessions[userId].replyMessageId,
+      null,
+      `📄 *File Detected* (Renamed)\n\n` +
+      `🔹 *Name:* \`${newName}\`\n` +
+      `🔹 *Size:* ${formatFileSize(userSessions[userId].size)}\n` +
+      `🔹 *Type:* ${userSessions[userId].type}\n\n` +
+      `Ready to upload?`,
+      {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '✅ Upload Now', callback_data: 'confirm_upload' }]
+          ]
+        }
+      }
+    ).catch(() => {});
+  }
+  
+  ctx.reply(`✅ Filename changed to: ${newName}`);
 });
 
 // Helper functions
@@ -204,8 +170,7 @@ function isValidUrl(string) {
 function formatFileSize(bytes) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(2)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
 }
 
 async function getFileInfo(url) {
@@ -217,15 +182,7 @@ async function getFileInfo(url) {
 }
 
 async function downloadFileWithProgress(url, tempDir, progressCallback) {
-  const parsedUrl = new URL(url);
-  let filename = path.basename(parsedUrl.pathname);
-  
-  if (!filename || filename === parsedUrl.hostname || !path.extname(filename)) {
-    const contentType = await getContentType(url);
-    const ext = contentType.split('/').pop();
-    filename = `file_${Date.now()}.${ext}`;
-  }
-
+  const filename = path.basename(new URL(url).pathname) || `file_${Date.now()}`;
   const filePath = path.join(tempDir, filename);
   const writer = fs.createWriteStream(filePath);
   
@@ -241,8 +198,7 @@ async function downloadFileWithProgress(url, tempDir, progressCallback) {
   response.data.on('data', (chunk) => {
     downloadedLength += chunk.length;
     if (totalLength && progressCallback) {
-      const progress = (downloadedLength / totalLength) * 100;
-      progressCallback(progress);
+      progressCallback((downloadedLength / totalLength) * 100);
     }
   });
 
@@ -254,15 +210,6 @@ async function downloadFileWithProgress(url, tempDir, progressCallback) {
   });
 
   return { filePath, originalName: filename };
-}
-
-async function getContentType(url) {
-  try {
-    const response = await axios.head(url);
-    return response.headers['content-type'] || 'application/octet-stream';
-  } catch (error) {
-    return 'application/octet-stream';
-  }
 }
 
 module.exports = bot;
