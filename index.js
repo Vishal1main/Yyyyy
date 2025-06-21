@@ -3,14 +3,14 @@ const express = require('express');
 const { Telegraf } = require('telegraf');
 const mongoose = require('mongoose');
 
-// Connect to MongoDB
+// MongoDB connect
 mongoose.connect(process.env.MONGODB_URI, {
   useNewUrlParser: true,
   useUnifiedTopology: true
-}).then(() => console.log('Connected to MongoDB'))
-  .catch(err => console.error('MongoDB connection error:', err));
+}).then(() => console.log('✅ Connected to MongoDB'))
+  .catch(err => console.error('❌ MongoDB connection error:', err));
 
-// Define user schema
+// Schema
 const userSchema = new mongoose.Schema({
   userId: { type: Number, required: true, unique: true },
   expiryDate: { type: Date, required: true },
@@ -20,21 +20,18 @@ const userSchema = new mongoose.Schema({
 
 const PremiumUser = mongoose.model('PremiumUser', userSchema);
 
-// Initialize bot
+// Bot setup
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 const ADMIN_ID = parseInt(process.env.ADMIN_ID);
-
 const PREMIUM_CHANNEL = {
   id: process.env.PREMIUM_CHANNEL_ID,
   inviteLink: process.env.PREMIUM_CHANNEL_INVITE_LINK
 };
 
-// Web server for Render ping
+// Web server for Render
 const app = express();
 const PORT = process.env.PORT || 3000;
-app.get('/', (req, res) => {
-  res.send('🤖 Bot is running.');
-});
+app.get('/', (req, res) => res.send('🤖 Bot is running.'));
 app.listen(PORT, () => {
   console.log(`🌐 Web server running on port ${PORT}`);
 });
@@ -68,13 +65,7 @@ bot.command('addpremium', async (ctx) => {
 
   const userId = parseInt(args[1]);
   const duration = args[2].toLowerCase();
-
-  if (isNaN(userId)) {
-    return ctx.reply('⚠️ Invalid user ID.');
-  }
-
-  const now = new Date();
-  let expiryDate;
+  if (isNaN(userId)) return ctx.reply('⚠️ Invalid user ID.');
 
   const match = duration.match(/^(\d+)(min|mins|hour|hours|day|week|month)$/);
   if (!match) {
@@ -83,6 +74,8 @@ bot.command('addpremium', async (ctx) => {
 
   const value = parseInt(match[1]);
   const unit = match[2];
+  const now = new Date();
+  let expiryDate;
 
   switch (unit) {
     case 'min':
@@ -109,15 +102,11 @@ bot.command('addpremium', async (ctx) => {
   try {
     await PremiumUser.findOneAndUpdate(
       { userId },
-      {
-        userId,
-        expiryDate,
-        addedBy: ctx.from.id
-      },
+      { userId, expiryDate, addedBy: ctx.from.id },
       { upsert: true, new: true }
     );
 
-    const message = `✅ User ${userId} has been added to premium until *${expiryDate.toLocaleString()}*.\n\n` +
+    const message = `✅ User ${userId} has been added to premium until *${expiryDate.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}*.\n\n` +
                     `🔗 Share this invite link:\n${PREMIUM_CHANNEL.inviteLink}`;
 
     return ctx.replyWithMarkdown(message);
@@ -127,7 +116,7 @@ bot.command('addpremium', async (ctx) => {
   }
 });
 
-// Remove expired users every hour
+// Remove expired users from channel
 setInterval(async () => {
   try {
     const now = new Date();
@@ -135,31 +124,41 @@ setInterval(async () => {
 
     for (const user of expiredUsers) {
       try {
-        console.log(`Removing expired user ${user.userId}`);
+        console.log(`⛔ Removing expired user ${user.userId}`);
+
+        // Kick user from channel
+        await bot.telegram.kickChatMember(PREMIUM_CHANNEL.id, user.userId);
+
+        // Optional: Allow rejoining later (unban)
+        await bot.telegram.unbanChatMember(PREMIUM_CHANNEL.id, user.userId);
+
+        // Notify admin
         await bot.telegram.sendMessage(
           ADMIN_ID,
-          `⏰ User ${user.userId} expired on ${user.expiryDate.toLocaleString()} and was removed.`
+          `⏰ User ${user.userId} has been removed from the premium channel (expired on ${user.expiryDate.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })})`
         );
+
+        // Remove from DB
         await PremiumUser.deleteOne({ userId: user.userId });
       } catch (err) {
-        console.error(`Error removing user ${user.userId}:`, err);
+        console.error(`❌ Error removing user ${user.userId}:`, err);
       }
     }
   } catch (err) {
-    console.error('Error checking for expired users:', err);
+    console.error('❌ Error checking for expired users:', err);
   }
-}, 60 * 60 * 1000);
+}, 60 * 1000); // every 1 minute
 
-// Handle errors
+// Error handling
 bot.catch((err) => {
   console.error('Bot error:', err);
 });
 
-// Launch bot
+// Start bot
 bot.launch().then(() => {
   console.log('🚀 Bot started');
 });
 
-// Graceful stop
+// Graceful shutdown
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
