@@ -1,10 +1,13 @@
 require('dotenv').config();
+const express = require('express');
 const { Telegraf } = require('telegraf');
 const mongoose = require('mongoose');
 
 // Connect to MongoDB
-mongoose.connect(process.env.MONGODB_URI, { useNewUrlParser: true, useUnifiedTopology: true })
-  .then(() => console.log('Connected to MongoDB'))
+mongoose.connect(process.env.MONGODB_URI, {
+  useNewUrlParser: true,
+  useUnifiedTopology: true
+}).then(() => console.log('Connected to MongoDB'))
   .catch(err => console.error('MongoDB connection error:', err));
 
 // Define user schema
@@ -19,19 +22,26 @@ const PremiumUser = mongoose.model('PremiumUser', userSchema);
 
 // Initialize bot
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
-
-// Admin ID - replace with your actual admin ID
 const ADMIN_ID = parseInt(process.env.ADMIN_ID);
 
-// Premium channel info - replace with your actual channel info
 const PREMIUM_CHANNEL = {
   id: process.env.PREMIUM_CHANNEL_ID,
   inviteLink: process.env.PREMIUM_CHANNEL_INVITE_LINK
 };
 
-// Start command with welcome message
+// Web server for Render ping
+const app = express();
+const PORT = process.env.PORT || 3000;
+app.get('/', (req, res) => {
+  res.send('🤖 Bot is running.');
+});
+app.listen(PORT, () => {
+  console.log(`🌐 Web server running on port ${PORT}`);
+});
+
+// Start command
 bot.start((ctx) => {
-  const welcomeMessage = `
+  return ctx.replyWithMarkdown(`
 👋 *Welcome to Premium Access Bot!*
 
 This bot is used to manage access to premium content.
@@ -42,19 +52,15 @@ This bot is used to manage access to premium content.
 - Admin-only commands
 
 _You need admin privileges to use this bot._
-  `;
-  
-  return ctx.replyWithMarkdown(welcomeMessage);
+  `);
 });
 
-// Add premium user command
+// /addpremium command
 bot.command('addpremium', async (ctx) => {
-  // Check if user is admin
   if (ctx.from.id !== ADMIN_ID) {
     return ctx.reply('⛔ You are not authorized to use this command.');
   }
 
-  // Parse command arguments
   const args = ctx.message.text.split(' ');
   if (args.length < 3) {
     return ctx.reply('⚠️ Usage: /addpremium <user_id> <duration>');
@@ -64,40 +70,46 @@ bot.command('addpremium', async (ctx) => {
   const duration = args[2].toLowerCase();
 
   if (isNaN(userId)) {
-    return ctx.reply('⚠️ Invalid user ID. Please provide a numeric user ID.');
+    return ctx.reply('⚠️ Invalid user ID.');
   }
 
-  // Calculate expiry date
-  let expiryDate;
   const now = new Date();
+  let expiryDate;
 
-  if (duration.endsWith('day')) {
-    const days = parseInt(duration);
-    if (isNaN(days)) {
-      return ctx.reply('⚠️ Invalid duration format. Example: 7day');
-    }
-    expiryDate = new Date(now.getTime() + days * 24 * 60 * 60 * 1000);
-  } else if (duration.endsWith('week')) {
-    const weeks = parseInt(duration);
-    if (isNaN(weeks)) {
-      return ctx.reply('⚠️ Invalid duration format. Example: 2week');
-    }
-    expiryDate = new Date(now.getTime() + weeks * 7 * 24 * 60 * 60 * 1000);
-  } else if (duration.endsWith('month')) {
-    const months = parseInt(duration);
-    if (isNaN(months)) {
-      return ctx.reply('⚠️ Invalid duration format. Example: 1month');
-    }
-    expiryDate = new Date(now.setMonth(now.getMonth() + months));
-  } else {
-    return ctx.reply('⚠️ Invalid duration. Use format like: 7day, 2week, 1month');
+  const match = duration.match(/^(\d+)(min|mins|hour|hours|day|week|month)$/);
+  if (!match) {
+    return ctx.reply('⚠️ Invalid duration. Use formats like: 1min, 30mins, 2hour, 7day, 1month');
+  }
+
+  const value = parseInt(match[1]);
+  const unit = match[2];
+
+  switch (unit) {
+    case 'min':
+    case 'mins':
+      expiryDate = new Date(now.getTime() + value * 60 * 1000);
+      break;
+    case 'hour':
+    case 'hours':
+      expiryDate = new Date(now.getTime() + value * 60 * 60 * 1000);
+      break;
+    case 'day':
+      expiryDate = new Date(now.getTime() + value * 24 * 60 * 60 * 1000);
+      break;
+    case 'week':
+      expiryDate = new Date(now.getTime() + value * 7 * 24 * 60 * 60 * 1000);
+      break;
+    case 'month':
+      const newDate = new Date(now);
+      newDate.setMonth(newDate.getMonth() + value);
+      expiryDate = newDate;
+      break;
   }
 
   try {
-    // Save user to database
     await PremiumUser.findOneAndUpdate(
       { userId },
-      { 
+      {
         userId,
         expiryDate,
         addedBy: ctx.from.id
@@ -105,18 +117,17 @@ bot.command('addpremium', async (ctx) => {
       { upsert: true, new: true }
     );
 
-    // Send invite link to admin
-    const message = `✅ User ${userId} has been added to premium until ${expiryDate.toLocaleString()}\n\n` +
-                    `Here's the invite link to send to the user:\n${PREMIUM_CHANNEL.inviteLink}`;
+    const message = `✅ User ${userId} has been added to premium until *${expiryDate.toLocaleString()}*.\n\n` +
+                    `🔗 Share this invite link:\n${PREMIUM_CHANNEL.inviteLink}`;
 
-    return ctx.reply(message);
+    return ctx.replyWithMarkdown(message);
   } catch (err) {
     console.error('Error adding premium user:', err);
-    return ctx.reply('❌ An error occurred while adding the premium user.');
+    return ctx.reply('❌ Failed to add premium user.');
   }
 });
 
-// Check for expired users periodically
+// Remove expired users every hour
 setInterval(async () => {
   try {
     const now = new Date();
@@ -124,17 +135,11 @@ setInterval(async () => {
 
     for (const user of expiredUsers) {
       try {
-        // Here you would implement the actual removal from the channel
-        // For now, we'll just log it and remove from database
-        console.log(`Removing expired user ${user.userId} from premium channel`);
-        
-        // Notify admin
+        console.log(`Removing expired user ${user.userId}`);
         await bot.telegram.sendMessage(
           ADMIN_ID,
-          `⏰ User ${user.userId} has been removed from premium channel (expired on ${user.expiryDate.toLocaleString()})`
+          `⏰ User ${user.userId} expired on ${user.expiryDate.toLocaleString()} and was removed.`
         );
-        
-        // Remove from database
         await PremiumUser.deleteOne({ userId: user.userId });
       } catch (err) {
         console.error(`Error removing user ${user.userId}:`, err);
@@ -143,18 +148,18 @@ setInterval(async () => {
   } catch (err) {
     console.error('Error checking for expired users:', err);
   }
-}, 60 * 60 * 1000); // Check every hour
+}, 60 * 60 * 1000);
 
-// Error handling
+// Handle errors
 bot.catch((err) => {
   console.error('Bot error:', err);
 });
 
 // Launch bot
 bot.launch().then(() => {
-  console.log('Bot started');
+  console.log('🚀 Bot started');
 });
 
-// Enable graceful stop
+// Graceful stop
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
