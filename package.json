@@ -1,15 +1,14 @@
 {
-  "name": "telegram-downloader-bot",
+  "name": "telegram-premium-bot",
   "version": "1.0.0",
-  "description": "Telegram bot for downloading direct links and uploading to Telegram",
-  "main": "Op_wood.js",
+  "description": "Telegram bot for managing premium channel access",
+  "main": "index.js",
   "scripts": {
-    "start": "node Op_wood.js"
+    "start": "node index.js"
   },
   "dependencies": {
-    "axios": "^1.6.8",
-    "express": "^4.19.2",
-    "telegraf": "^4.17.0",
-    "uuid": "^9.0.1"
+    "dotenv": "^16.0.3",
+    "mongoose": "^7.0.3",
+    "telegraf": "^4.11.2"
   }
 }
