@@ -282,21 +282,42 @@ setInterval(async () => {
   }
 }, 60000); // Check every minute
 
-// Webhook setup (if enabled)
-if (process.env.WEBHOOK_MODE === 'true') {
-  const app = express();
-  const port = process.env.PORT || 3000;
+// Webhook setup for Render
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+// Health check endpoint
+app.get('/', (req, res) => {
+  res.status(200).send('Bot is running');
+});
+
+// Start the server
+const server = app.listen(PORT, () => {
+  console.log(`Server is running on port ${PORT}`);
+});
+
+// Set webhook if in production
+if (process.env.NODE_ENV === 'production') {
+  const webhookPath = `/webhook/${process.env.TELEGRAM_BOT_TOKEN}`;
+  app.use(bot.webhookCallback(webhookPath));
   
-  app.use(express.json());
-  app.use(bot.webhookCallback(`/bot${process.env.TELEGRAM_BOT_TOKEN}`));
-  
-  app.listen(port, () => {
-    console.log(`Webhook server running on port ${port}`);
-    bot.telegram.setWebhook(`${process.env.WEBHOOK_URL}/bot${process.env.TELEGRAM_BOT_TOKEN}`);
-  });
+  bot.telegram.setWebhook(`${process.env.WEBHOOK_URL}${webhookPath}`)
+    .then(() => console.log('Webhook set successfully'))
+    .catch(err => console.error('Error setting webhook:', err));
 } else {
-  bot.launch().then(() => console.log('Bot running in polling mode'));
+  // Use polling in development
+  bot.launch()
+    .then(() => console.log('Bot running in polling mode'))
+    .catch(err => console.error('Error starting bot:', err));
 }
 
-process.once('SIGINT', () => bot.stop('SIGINT'));
-process.once('SIGTERM', () => bot.stop('SIGTERM'));
+// Graceful shutdown
+process.once('SIGINT', () => {
+  bot.stop('SIGINT');
+  server.close();
+});
+
+process.once('SIGTERM', () => {
+  bot.stop('SIGTERM');
+  server.close();
+});
