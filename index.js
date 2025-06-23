@@ -1,238 +1,196 @@
 require('dotenv').config();
-const { Telegraf, Markup } = require('telegraf');
-const mongoose = require('mongoose');
 const express = require('express');
+const { Telegraf } = require('telegraf');
+const mongoose = require('mongoose');
 
-// MongoDB connection
-mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/premiumBot', {
+// MongoDB connect
+mongoose.connect(process.env.MONGODB_URI, {
   useNewUrlParser: true,
-  useUnifiedTopology: true,
-  serverSelectionTimeoutMS: 5000
-})
-.then(() => console.log('Connected to MongoDB'))
-.catch(err => {
-  console.error('MongoDB connection error:', err);
-  process.exit(1);
-});
+  useUnifiedTopology: true
+}).then(() => console.log('✅ Connected to MongoDB'))
+  .catch(err => console.error('❌ MongoDB connection error:', err));
 
-// Enhanced User schema with proper indexing
+// Schema
 const userSchema = new mongoose.Schema({
   userId: { type: Number, required: true, unique: true },
-  username: { type: String },
-  firstName: { type: String },
-  lastName: { type: String },
   expiryDate: { type: Date, required: true },
   addedBy: { type: Number, required: true },
-  addedAt: { type: Date, default: Date.now },
-  planName: { type: String, required: true, enum: ['Basic', 'Premium', 'VIP'], default: 'Premium' },
-  paymentProof: { type: String },
-  isActive: { type: Boolean, default: true }
+  addedAt: { type: Date, default: Date.now }
 });
-
-// Add indexes for better performance
-userSchema.index({ userId: 1 });
-userSchema.index({ expiryDate: 1 });
-userSchema.index({ isActive: 1 });
 
 const PremiumUser = mongoose.model('PremiumUser', userSchema);
 
+// Bot setup
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 const ADMIN_ID = parseInt(process.env.ADMIN_ID);
+const LOG_CHANNEL_ID = process.env.LOG_CHANNEL_ID; // optional logging
 const PREMIUM_CHANNEL = {
   id: process.env.PREMIUM_CHANNEL_ID,
   inviteLink: process.env.PREMIUM_CHANNEL_INVITE_LINK
 };
 
-// ... [Keep your existing payment methods and start command code]
-
-// Enhanced Myplan command with proper user-specific data
-bot.command('myplan', async (ctx) => {
-  try {
-    const user = await PremiumUser.findOne({ 
-      userId: ctx.from.id,
-      isActive: true,
-      expiryDate: { $gt: new Date() }
-    });
-
-    if (!user) {
-      return ctx.replyWithHTML(`
-<i>You don't have an active premium plan.</i>
-
-🔹 Use /plan to see available plans
-🔹 Contact admin if you've already paid
-      `);
-    }
-
-    const remainingTime = user.expiryDate - new Date();
-    const days = Math.floor(remainingTime / (1000 * 60 * 60 * 24));
-    const hours = Math.floor((remainingTime % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
-
-    ctx.replyWithHTML(`
-<b>📋 YOUR PLAN DETAILS</b>
-
-👤 <b>User:</b> ${ctx.from.first_name} ${ctx.from.last_name || ''}
-🆔 <b>ID:</b> <code>${user.userId}</code>
-📝 <b>Plan:</b> ${user.planName}
-📅 <b>Expiry:</b> ${user.expiryDate.toLocaleString()}
-⏳ <b>Remaining:</b> ${days}d ${hours}h
-
-<a href="${PREMIUM_CHANNEL.inviteLink}">🔗 Join Premium Channel</a>
-    `);
-  } catch (err) {
-    console.error('Error in myplan command:', err);
-    ctx.replyWithHTML('<b>❌ Error fetching your plan details. Please try again later.</b>');
-  }
+// Web server for Render
+const app = express();
+const PORT = process.env.PORT || 3000;
+app.get('/', (req, res) => res.send('🤖 Bot is running.'));
+app.listen(PORT, () => {
+  console.log(`🌐 Web server running on port ${PORT}`);
 });
 
-// Enhanced Add Premium Command
+// Start command
+bot.start((ctx) => {
+  return ctx.replyWithMarkdown(`
+👋 *Welcome to Premium Access Bot!*
+
+This bot is used to manage access to premium content.
+
+*Features:*
+- Add premium users with time limits
+- Automatic removal after expiry
+- Admin-only commands
+
+_You need admin privileges to use this bot._
+  `);
+});
+
+// /addpremium command
 bot.command('addpremium', async (ctx) => {
   if (ctx.from.id !== ADMIN_ID) {
-    return ctx.replyWithHTML('<b>⛔ Admin only command!</b>');
+    return ctx.reply('⛔ You are not authorized to use this command.');
   }
 
-  const args = ctx.message.text.split(' ').filter(arg => arg.trim() !== '');
+  const args = ctx.message.text.split(' ');
   if (args.length < 3) {
-    return ctx.replyWithHTML(`
-<b>⚠️ Usage:</b> <code>/addpremium ID duration [plan]</code>
-<b>Example:</b> <code>/addpremium 1234567 30day VIP</code>
-<b>Plans:</b> Basic, Premium, VIP
-    `);
+    return ctx.reply('⚠️ Usage: /addpremium <user_id> <duration>');
   }
 
   const userId = parseInt(args[1]);
-  if (isNaN(userId)) return ctx.replyWithHTML('<b>⚠️ Invalid user ID</b>');
+  const duration = args[2].toLowerCase();
+  if (isNaN(userId)) return ctx.reply('⚠️ Invalid user ID.');
 
-  const timeInput = args[2].toLowerCase();
-  const timeValue = parseInt(timeInput.match(/\d+/)?.[0]);
-  const timeUnit = timeInput.match(/[a-z]+/)?.[0];
-  const planName = args.slice(3).join(' ') || 'Premium';
-
-  // Validate plan name
-  if (!['Basic', 'Premium', 'VIP'].includes(planName)) {
-    return ctx.replyWithHTML('<b>⚠️ Invalid plan name. Use: Basic, Premium, or VIP</b>');
+  const match = duration.match(/^(\d+)(min|mins|hour|hours|day|week|month)$/);
+  if (!match) {
+    return ctx.reply('⚠️ Invalid duration. Use formats like: 1min, 30mins, 2hour, 7day, 1month');
   }
 
-  if (!timeValue || !timeUnit) {
-    return ctx.replyWithHTML('<b>⚠️ Invalid duration format (e.g., 30day, 1month, 3week)</b>');
-  }
-
+  const value = parseInt(match[1]);
+  const unit = match[2];
   const now = new Date();
   let expiryDate;
 
-  switch(timeUnit) {
-    case 'min': expiryDate = new Date(now.getTime() + timeValue * 60000); break;
-    case 'hour': expiryDate = new Date(now.getTime() + timeValue * 3600000); break;
-    case 'day': expiryDate = new Date(now.getTime() + timeValue * 86400000); break;
-    case 'week': expiryDate = new Date(now.getTime() + timeValue * 604800000); break;
-    case 'month': expiryDate = new Date(now.setMonth(now.getMonth() + timeValue)); break;
-    default: return ctx.replyWithHTML('<b>⚠️ Invalid time unit (min/hour/day/week/month)</b>');
+  switch (unit) {
+    case 'min':
+    case 'mins':
+      expiryDate = new Date(now.getTime() + value * 60 * 1000);
+      break;
+    case 'hour':
+    case 'hours':
+      expiryDate = new Date(now.getTime() + value * 60 * 60 * 1000);
+      break;
+    case 'day':
+      expiryDate = new Date(now.getTime() + value * 24 * 60 * 60 * 1000);
+      break;
+    case 'week':
+      expiryDate = new Date(now.getTime() + value * 7 * 24 * 60 * 60 * 1000);
+      break;
+    case 'month':
+      const newDate = new Date(now);
+      newDate.setMonth(newDate.getMonth() + value);
+      expiryDate = newDate;
+      break;
   }
 
   try {
-    // Get user info from Telegram
-    let userInfo = {};
-    try {
-      const tgUser = await bot.telegram.getChat(userId);
-      userInfo = {
-        username: tgUser.username,
-        firstName: tgUser.first_name,
-        lastName: tgUser.last_name
-      };
-    } catch (e) {
-      console.log('Could not fetch user info from Telegram', e);
-    }
-
     await PremiumUser.findOneAndUpdate(
       { userId },
-      { 
-        userId,
-        ...userInfo,
-        expiryDate,
-        addedBy: ctx.from.id,
-        planName,
-        isActive: true
-      },
+      { userId, expiryDate, addedBy: ctx.from.id },
       { upsert: true, new: true }
     );
 
-    ctx.replyWithHTML(`
-<b>✅ PREMIUM ACCESS ADDED</b>
+    const message = `✅ User ${userId} has been added to premium until *${expiryDate.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}*.\n\n` +
+                    `🔗 Share this invite link:\n${PREMIUM_CHANNEL.inviteLink}`;
 
-👤 <b>User:</b> ${userInfo.firstName || 'Unknown'} ${userInfo.lastName || ''}
-🆔 <b>ID:</b> <code>${userId}</code>
-📝 <b>Plan:</b> ${planName}
-⏳ <b>Expires:</b> ${expiryDate.toLocaleString()}
-📅 <b>Added On:</b> ${now.toLocaleString()}
-🔗 <a href="${PREMIUM_CHANNEL.inviteLink}">Invite Link</a>
-    `);
-
-    // Notify user
-    try {
-      await bot.telegram.sendMessage(userId, `
-<b>🎉 YOUR PREMIUM ACCESS ACTIVATED!</b>
-
-📝 <b>Plan:</b> ${planName}
-⏳ <b>Expires:</b> ${expiryDate.toLocaleString()}
-
-<a href="${PREMIUM_CHANNEL.inviteLink}">🔗 Join Premium Channel</a>
-
-Thank you for subscribing!
-      `, { parse_mode: 'HTML' });
-    } catch (userNotifyError) {
-      console.log(`Couldn't notify user ${userId}`);
-    }
+    return ctx.replyWithMarkdown(message);
   } catch (err) {
-    console.error('Error in addpremium command:', err);
-    ctx.replyWithHTML('<b>❌ Error saving user data. Please check logs.</b>');
+    console.error('Error adding premium user:', err);
+    return ctx.reply('❌ Failed to add premium user.');
   }
 });
 
-// Automatic Plan Expiry Check
-async function checkExpiredPlans() {
+// /listusers command
+bot.command('listusers', async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return ctx.reply('⛔ You are not authorized.');
+
+  const users = await PremiumUser.find();
+  if (!users.length) return ctx.reply('ℹ️ No premium users found.');
+
+  let message = `👥 *Active Premium Users:*\n\n`;
+  users.forEach((u, i) => {
+    message += `${i + 1}. \`${u.userId}\` — expires on: *${u.expiryDate.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}*\n`;
+  });
+
+  return ctx.replyWithMarkdown(message);
+});
+
+// Remove expired users from channel
+setInterval(async () => {
   try {
     const now = new Date();
-    const expiredUsers = await PremiumUser.find({
-      expiryDate: { $lte: now },
-      isActive: true
-    });
+    const expiredUsers = await PremiumUser.find({ expiryDate: { $lte: now } });
 
-    if (expiredUsers.length > 0) {
-      console.log(`Found ${expiredUsers.length} expired users`);
+    for (const user of expiredUsers) {
+      try {
+        console.log(`🧹 Removing expired user ${user.userId}`);
 
-      for (const user of expiredUsers) {
-        // Mark as inactive instead of deleting to keep records
-        await PremiumUser.updateOne(
-          { userId: user.userId },
-          { $set: { isActive: false } }
-        );
+        // Kick user from channel
+        await bot.telegram.kickChatMember(PREMIUM_CHANNEL.id, user.userId);
+
+        // Optional: Allow rejoining later (unban)
+        await bot.telegram.unbanChatMember(PREMIUM_CHANNEL.id, user.userId);
+
+        const time = user.expiryDate.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
 
         // Notify admin
         await bot.telegram.sendMessage(
           ADMIN_ID,
-          `⏰ Plan expired for user ${user.userId} (${user.planName})`,
-          { parse_mode: 'HTML' }
+          `⏰ User ${user.userId} has been removed from the premium channel (expired on ${time})`
         );
 
-        // Notify user if possible
-        try {
+        // Notify user
+        await bot.telegram.sendMessage(
+          user.userId,
+          `❌ Your premium access has expired as of ${time}.`
+        );
+
+        // Log to channel if set
+        if (LOG_CHANNEL_ID) {
           await bot.telegram.sendMessage(
-            user.userId,
-            `⚠️ Your ${user.planName} plan has expired. Renew to continue access.`,
-            { parse_mode: 'HTML' }
+            LOG_CHANNEL_ID,
+            `🗑️ Removed expired premium user ${user.userId} (expired at ${time})`
           );
-        } catch (e) {
-          console.log(`Couldn't notify expired user ${user.userId}`);
         }
+
+        // Remove from DB
+        await PremiumUser.deleteOne({ userId: user.userId });
+      } catch (err) {
+        console.error(`❌ Error removing user ${user.userId}:`, err);
       }
     }
   } catch (err) {
-    console.error('Error in checkExpiredPlans:', err);
+    console.error('❌ Error checking for expired users:', err);
   }
-}
+}, 60 * 1000); // every 1 minute
 
-// Run expiry check every hour
-setInterval(checkExpiredPlans, 3600000);
-// Initial check when bot starts
-checkExpiredPlans();
+// Error handling
+bot.catch((err) => {
+  console.error('Bot error:', err);
+});
 
-// ... [Keep your existing server setup and webhook/polling code]
+// Start bot
+bot.launch().then(() => {
+  console.log('🚀 Bot started');
+});
+
+// Graceful shutdown
+process.once('SIGINT', () => bot.stop('SIGINT'));
+process.once('SIGTERM', () => bot.stop('SIGTERM'));
